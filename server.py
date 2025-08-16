@@ -1,7 +1,6 @@
 import os
 import re
-import json
-from typing import Optional, Tuple
+from typing import Optional
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
@@ -11,31 +10,30 @@ from hf_client import SimilarityClient, GradioSpaceError
 
 # ---- Config (via env or defaults) -------------------------------------------
 SPACE_URL = os.getenv("SPACE_URL", "https://rathod31-kannada-english-sim.hf.space")
-API_NAME  = os.getenv("SPACE_API_NAME", "/_on_click")   # from your current Space
+API_NAME = os.getenv("SPACE_API_NAME", "/_on_click")  # from your current Space
 REQUEST_MAX_MB = float(os.getenv("REQUEST_MAX_MB", "20"))
 MAX_TEXT_CHARS = int(os.getenv("MAX_TEXT_CHARS", "20000"))  # post-trim cap
 ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "*")  # e.g., "https://your-webapp.example"
-
 # -----------------------------------------------------------------------------
 
 app = Flask(__name__)
-# Limit request size
 app.config['MAX_CONTENT_LENGTH'] = int(REQUEST_MAX_MB * 1024 * 1024)
-
-# CORS for Unity / web clients
 CORS(app, resources={r"/*": {"origins": ALLOWED_ORIGINS}})
 
-# Initialize HF client
-sim_client = SimilarityClient(space_url=SPACE_URL, api_name=API_NAME)
+# Lazy client initialization
+_sim_client = None
+
+def get_client() -> SimilarityClient:
+    global _sim_client
+    if _sim_client is None:
+        _sim_client = SimilarityClient(space_url=SPACE_URL, api_name=API_NAME)
+    return _sim_client
 
 LANG_SET = {"kannada", "english"}
 
 def _clean_text(s: str) -> str:
-    # basic whitespace cleanup + cap
     s = re.sub(r'\s+', ' ', s or '').strip()
-    if len(s) > MAX_TEXT_CHARS:
-        s = s[:MAX_TEXT_CHARS]
-    return s
+    return s[:MAX_TEXT_CHARS] if len(s) > MAX_TEXT_CHARS else s
 
 def _validate_lang(lang: str) -> str:
     if not lang:
@@ -43,12 +41,16 @@ def _validate_lang(lang: str) -> str:
     l = lang.strip().lower()
     if l not in LANG_SET:
         raise ValueError("Invalid 'lang'. Use 'kannada' or 'english'.")
-    return l.capitalize()  # Space expects first-letter capitalized
+    return l.capitalize()  # Space expects first letter capitalized
 
 @app.get("/healthz")
 def healthz():
-    ok = sim_client.healthcheck()
-    return jsonify({"status": "ok" if ok else "degraded", "space": SPACE_URL})
+    try:
+        client = get_client()
+        ok = client.healthcheck()
+        return jsonify({"status": "ok" if ok else "degraded", "space": SPACE_URL})
+    except Exception as e:
+        return jsonify({"status": "error", "space": SPACE_URL, "detail": str(e)}), 503
 
 @app.get("/")
 def root():
@@ -71,7 +73,7 @@ def compare_text():
     }
     """
     try:
-        body = request.get_json(force=True, silent=False)
+        body = request.get_json(force=True)
     except Exception:
         return jsonify(error="Invalid JSON body."), 400
 
@@ -88,7 +90,8 @@ def compare_text():
         return jsonify(error=str(e)), 400
 
     try:
-        similarity = sim_client.compare(lang_for_space, text1, text2)
+        client = get_client()
+        similarity = client.compare(lang_for_space, text1, text2)
         return jsonify({
             "ok": True,
             "lang": lang_for_space,
@@ -139,7 +142,8 @@ def compare_file():
         return jsonify(error=str(e)), 400
 
     try:
-        similarity = sim_client.compare(lang_for_space, transcript_text, file_text)
+        client = get_client()
+        similarity = client.compare(lang_for_space, transcript_text, file_text)
         return jsonify({
             "ok": True,
             "lang": lang_for_space,
