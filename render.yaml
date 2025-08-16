@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: similarity-middleware
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn --bind 0.0.0.0:$PORT --workers 2 server:app
+    envVars:
+      - key: SPACE_URL
+        value: https://rathod31-kannada-english-sim.hf.space
+      - key: SPACE_API_NAME
+        value: /_on_click
+      - key: REQUEST_MAX_MB
+        value: "20"
+      - key: MAX_TEXT_CHARS
+        value: "20000"
+      - key: ALLOWED_ORIGINS
+        value: "*"
